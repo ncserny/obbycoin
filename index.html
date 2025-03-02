@@ -1,0 +1,1474 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<html>
+<head>
+    <title>Minecraft-like Coin Collector</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #score {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial;
+            font-size: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        #timer {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-family: Arial;
+            font-size: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        #gameOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-family: Arial;
+            z-index: 100;
+        }
+        #gameOverlay h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        #gameOverlay p {
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+        #startButton, #restartButton {
+            padding: 15px 30px;
+            font-size: 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #startButton:hover, #restartButton:hover {
+            background-color: #45a049;
+        }
+        #playerNameInput {
+            padding: 15px;
+            font-size: 18px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            border: none;
+            width: 300px;
+            text-align: center;
+            background-color: rgba(0, 0, 0, 1);
+            color: white;
+        }
+        #leaderboard {
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            width: 80%;
+            max-width: 500px;
+        }
+        #leaderboard h2 {
+            text-align: center;
+            margin-top: 0;
+        }
+        .leaderboard-entry {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .leaderboard-entry:last-child {
+            border-bottom: none;
+        }
+        .highlight {
+            background-color: rgba(255, 215, 0, 0.3);
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="score">Coins: 0</div>
+    <div id="timer">Time: 30s</div>
+    <div id="gameOverlay">
+        <h1>ObbyCoin</h1>
+        <p>Collect as many coins as possible in 60 seconds!</p>
+        <input type="text" id="playerNameInput" placeholder="Enter your name" maxlength="15">
+        <button id="startButton">Start Game</button>
+        <div id="leaderboard">
+            <h2>Leaderboard</h2>
+            <div id="leaderboardEntries"></div>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, player, coins = [];
+        let score = 0;
+        let points = 0; // Track actual points (different from coins collected)
+        let leftLeg, rightLeg, leftArm, rightArm;
+        let walkingCycle = 0;
+        let gameTime = 60; // 60 seconds game time
+        let timeRemaining = gameTime;
+        let gameState = 'start'; // 'start', 'playing', 'end'
+        let gameTimer;
+        let terrain; // Store terrain for height checking
+        let playerName = ""; // Store player name
+        
+        // Leaderboard
+        let leaderboard = [];
+        
+        // Load leaderboard from localStorage if available
+        if (localStorage.getItem('obbyLeaderboard')) {
+            try {
+                leaderboard = JSON.parse(localStorage.getItem('obbyLeaderboard'));
+            } catch (e) {
+                console.error("Error loading leaderboard:", e);
+                leaderboard = [];
+            }
+        }
+        
+        // Jump mechanics
+        let isJumping = false;
+        let jumpVelocity = 0;
+        let jumpCooldown = 0;
+        let canJump = true;
+        let hasDoubleJumped = false; // Track if player has used their double jump
+        
+        // DOM elements
+        const timerElement = document.getElementById('timer');
+        const scoreElement = document.getElementById('score');
+        const gameOverlay = document.getElementById('gameOverlay');
+        let startButton = document.getElementById('startButton');
+        let playerNameInput = document.getElementById('playerNameInput');
+        let leaderboardEntries = document.getElementById('leaderboardEntries');
+        
+        // Event listeners for game controls
+        startButton.addEventListener('click', startGame);
+        
+        // Display initial leaderboard
+        updateLeaderboardDisplay();
+        
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            // Add directional light (sun)
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 10);
+            scene.add(directionalLight);
+
+            // Create player (blocky person)
+            player = new THREE.Group();
+            
+            // Body
+            const bodyGeometry = new THREE.BoxGeometry(0.8, 1.2, 0.4);
+            const bodyMaterial = new THREE.MeshBasicMaterial({ color: 0x3333AA });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.6;
+            player.add(body);
+            
+            // Head
+            const headGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+            const headMaterial = new THREE.MeshBasicMaterial({ color: 0xFFCCBB });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 1.5;
+            player.add(head);
+            
+            // Face features
+            // Left eye
+            const eyeGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+            leftEye.position.set(-0.15, 1.55, 0.31);
+            player.add(leftEye);
+            
+            // Right eye
+            const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+            rightEye.position.set(0.15, 1.55, 0.31);
+            player.add(rightEye);
+            
+            // Mouth
+            const mouthGeometry = new THREE.BoxGeometry(0.2, 0.05, 0.1);
+            const mouthMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            const mouth = new THREE.Mesh(mouthGeometry, mouthMaterial);
+            mouth.position.set(0, 1.4, 0.31);
+            player.add(mouth);
+            
+            // Arms
+            const armGeometry = new THREE.BoxGeometry(0.3, 0.9, 0.3);
+            const armMaterial = new THREE.MeshBasicMaterial({ color: 0x3333AA });
+            
+            leftArm = new THREE.Mesh(armGeometry, armMaterial);
+            leftArm.position.x = -0.55;
+            leftArm.position.y = 0.6;
+            player.add(leftArm);
+            
+            rightArm = new THREE.Mesh(armGeometry, armMaterial);
+            rightArm.position.x = 0.55;
+            rightArm.position.y = 0.6;
+            player.add(rightArm);
+            
+            // Legs
+            const legGeometry = new THREE.BoxGeometry(0.3, 0.9, 0.3);
+            const legMaterial = new THREE.MeshBasicMaterial({ color: 0x0000AA });
+            
+            leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+            leftLeg.position.x = -0.25;
+            leftLeg.position.y = -0.45;
+            player.add(leftLeg);
+            
+            rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+            rightLeg.position.x = 0.25;
+            rightLeg.position.y = -0.45;
+            player.add(rightLeg);
+            
+            scene.add(player);
+
+            // Create ground
+            const groundSize = 100;
+            const gridDivisions = 100;
+            
+            // Create a grid helper for the ground
+            const gridHelper = new THREE.GridHelper(groundSize, gridDivisions, 0x444444, 0x888888);
+            gridHelper.position.y = 0;
+            scene.add(gridHelper);
+            
+            // Create a flat ground
+            const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize);
+            const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x228B22, side: THREE.DoubleSide });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = Math.PI / 2;
+            ground.position.y = 0;
+            scene.add(ground);
+            
+            // Create world boundaries
+            createWorldBoundaries(groundSize);
+            
+            // Create parkour obstacles
+            createObstacles();
+            
+            // Create coins - increased to 100
+            for(let i = 0; i < 100; i++) {
+                createCoin();
+            }
+
+            // Position player at the start
+            player.position.set(0, 0.9, 40);
+            
+            // Add instructions to the overlay
+            const instructions = document.createElement('p');
+            instructions.textContent = 'Use WASD to move and SPACE to jump';
+            gameOverlay.insertBefore(instructions, document.getElementById('startButton'));
+            
+            // Set camera position with better view
+            camera.position.y = 12; // Increased from 5 to 12
+            camera.position.z = 50; // Increased from 45 to 50
+            camera.lookAt(player.position);
+            
+            // Initialize tooltips visibility tracker
+            window.tooltipsVisible = true;
+        }
+
+        function createWorldBoundaries(size) {
+            const wallHeight = 10;
+            const wallThickness = 2;
+            const halfSize = size / 2;
+            const wallMaterial = new THREE.MeshBasicMaterial({ color: 0x8B4513 });
+            
+            // North wall
+            const northWallGeometry = new THREE.BoxGeometry(size + wallThickness, wallHeight, wallThickness);
+            const northWall = new THREE.Mesh(northWallGeometry, wallMaterial);
+            northWall.position.set(0, wallHeight / 2, -halfSize);
+            scene.add(northWall);
+            
+            // South wall
+            const southWallGeometry = new THREE.BoxGeometry(size + wallThickness, wallHeight, wallThickness);
+            const southWall = new THREE.Mesh(southWallGeometry, wallMaterial);
+            southWall.position.set(0, wallHeight / 2, halfSize);
+            scene.add(southWall);
+            
+            // East wall
+            const eastWallGeometry = new THREE.BoxGeometry(wallThickness, wallHeight, size);
+            const eastWall = new THREE.Mesh(eastWallGeometry, wallMaterial);
+            eastWall.position.set(halfSize, wallHeight / 2, 0);
+            scene.add(eastWall);
+            
+            // West wall
+            const westWallGeometry = new THREE.BoxGeometry(wallThickness, wallHeight, size);
+            const westWall = new THREE.Mesh(westWallGeometry, wallMaterial);
+            westWall.position.set(-halfSize, wallHeight / 2, 0);
+            scene.add(westWall);
+        }
+
+        function createObstacles() {
+            // Create a parkour course with various obstacles
+            
+            // Starting platform - made wider
+            createPlatform(0, 0, 40, 15, 1, 15, 0x8B4513);
+            
+            // Basic parkour path - wider platforms and smaller gaps
+            createPlatform(-8, 2, 30, 8, 1, 8, 0xFF0000);
+            createPlatform(-16, 4, 20, 8, 1, 8, 0xFF7F00);
+            createPlatform(-8, 6, 10, 8, 1, 8, 0xFFFF00);
+            createPlatform(0, 8, 0, 8, 1, 8, 0x00FF00);
+            createPlatform(8, 10, -10, 8, 1, 8, 0x0000FF);
+            createPlatform(16, 12, -20, 8, 1, 8, 0x4B0082);
+            createPlatform(8, 14, -30, 8, 1, 8, 0x9400D3);
+            
+            // Stepping stones - more of them and closer together
+            for (let i = 0; i < 10; i++) {
+                createPlatform(-4 + i * 1.5, 14, -40 - i * 1.5, 2.5, 1, 2.5, 0xFFD700);
+            }
+            
+            // Final destination - moved to be within map boundaries
+            createPlatform(0, 16, -45, 10, 2, 10, 0xFFD700); // Gold platform as the end goal
+            
+            // Add a flag or marker to indicate the end
+            createEndFlag(0, 18, -45);
+            
+            // Elevated area with multiple levels - wider platforms
+            createPlatform(20, 2, 20, 18, 2, 18, 0x8B4513);
+            createPlatform(20, 4, 20, 14, 2, 14, 0x9B5523);
+            createPlatform(20, 6, 20, 10, 2, 10, 0xAB6533);
+            
+            // Narrow bridges - made wider
+            createPlatform(-20, 8, 0, 18, 1, 3, 0x8B4513);
+            createPlatform(0, 10, -20, 3, 1, 18, 0x8B4513);
+            
+            // Add helper platforms to make big jumps easier
+            createPlatform(-4, 10, -15, 4, 1, 4, 0x8B4513);
+            createPlatform(4, 12, -25, 4, 1, 4, 0x8B4513);
+            createPlatform(4, 14, -35, 4, 1, 4, 0x8B4513);
+            
+            // Scattered platforms for exploration - positioned to help with navigation
+            const randomPlatforms = [
+                { x: -25, y: 3, z: 15, w: 6, h: 1, d: 6, color: 0x00FFFF },
+                { x: -15, y: 5, z: -15, w: 6, h: 1, d: 6, color: 0xFF00FF },
+                { x: 25, y: 4, z: -25, w: 6, h: 1, d: 6, color: 0xFFFF00 },
+                { x: 15, y: 6, z: 25, w: 6, h: 1, d: 6, color: 0x00FF00 }
+            ];
+            
+            randomPlatforms.forEach(p => {
+                createPlatform(p.x, p.y, p.z, p.w, p.h, p.d, p.color);
+            });
+            
+            // Create directional arrows to guide the player
+            createDirectionalArrows();
+            
+            // Add safety platforms below difficult jumps
+            createPlatform(-10, 1, 20, 20, 0.5, 20, 0x888888);
+            createPlatform(0, 3, 0, 20, 0.5, 20, 0x888888);
+            createPlatform(10, 5, -20, 20, 0.5, 20, 0x888888);
+        }
+
+        function createPlatform(x, y, z, width, height, depth, color) {
+            const geometry = new THREE.BoxGeometry(width, height, depth);
+            const material = new THREE.MeshBasicMaterial({ color: color });
+            const platform = new THREE.Mesh(geometry, material);
+            platform.position.set(x, y, z);
+            scene.add(platform);
+            
+            // Add the platform to a list for collision detection
+            if (!window.platforms) window.platforms = [];
+            window.platforms.push({
+                mesh: platform,
+                width: width,
+                height: height,
+                depth: depth,
+                x: x,
+                y: y,
+                z: z
+            });
+        }
+
+        function createCoin() {
+            // 20% chance to create a double-value coin
+            const isDoubleValueCoin = Math.random() < 0.2;
+            
+            const coinGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 32);
+            // Regular gold coins, special coins are silver
+            const coinMaterial = new THREE.MeshBasicMaterial({ 
+                color: isDoubleValueCoin ? 0xC0C0C0 : 0xFFD700 
+            });
+            const coin = new THREE.Mesh(coinGeometry, coinMaterial);
+            
+            // Place coins directly on platforms or ground
+            let validPosition = false;
+            let x, y, z, platformIndex;
+            
+            while (!validPosition) {
+                if (window.platforms && window.platforms.length > 0) {
+                    // 80% chance to place on a platform, 20% chance on the ground
+                    if (Math.random() < 0.8 && window.platforms.length > 0) {
+                        // Choose a random platform
+                        platformIndex = Math.floor(Math.random() * window.platforms.length);
+                        const platform = window.platforms[platformIndex];
+                        
+                        // Place coin on top of the platform
+                        x = platform.x + (Math.random() * 0.8 - 0.4) * platform.width;
+                        z = platform.z + (Math.random() * 0.8 - 0.4) * platform.depth;
+                        y = platform.y + platform.height/2 + 0.5; // Just above the platform
+                        
+                        validPosition = true;
+                    } else {
+                        // Place on the ground
+                        x = Math.random() * 90 - 45;
+                        z = Math.random() * 90 - 45;
+                        y = 0.5; // Just above the ground
+                        
+                        // Make sure it's not too close to any platform
+                        validPosition = true;
+                        for (const platform of window.platforms) {
+                            const dx = Math.abs(x - platform.x);
+                            const dz = Math.abs(z - platform.z);
+                            
+                            if (dx < platform.width/2 + 1 && 
+                                dz < platform.depth/2 + 1) {
+                                validPosition = false;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // If no platforms yet, just place on the ground
+                    x = Math.random() * 90 - 45;
+                    z = Math.random() * 90 - 45;
+                    y = 0.5; // Just above the ground
+                    validPosition = true;
+                }
+            }
+            
+            coin.position.x = x;
+            coin.position.z = z;
+            coin.position.y = y;
+            coin.rotation.x = Math.PI / 2;
+            
+            // Store the coin value
+            coin.userData = {
+                value: isDoubleValueCoin ? 2 : 1
+            };
+            
+            // For double-value coins, make them slightly larger and add a glow effect
+            if (isDoubleValueCoin) {
+                coin.scale.set(1.3, 1, 1.3);
+                
+                // Add a glowing ring around double-value coins
+                const ringGeometry = new THREE.TorusGeometry(0.4, 0.05, 16, 32);
+                const ringMaterial = new THREE.MeshBasicMaterial({ color: 0x00FFFF });
+                const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+                ring.rotation.x = Math.PI / 2;
+                coin.add(ring);
+            }
+            
+            scene.add(coin);
+            coins.push(coin);
+        }
+
+        function isOnPlatform() {
+            if (!window.platforms) return false;
+            
+            const playerX = player.position.x;
+            const playerY = player.position.y;
+            const playerZ = player.position.z;
+            
+            // Player feet position (bottom of the player)
+            const playerFeetY = playerY - 0.9;
+            
+            // Check if player is on any platform - increased threshold for easier landing
+            for (const platform of window.platforms) {
+                const dx = Math.abs(playerX - platform.x);
+                const dy = playerFeetY - (platform.y + platform.height/2);
+                const dz = Math.abs(playerZ - platform.z);
+                
+                // Check if player is above the platform - more forgiving collision
+                if (dx < platform.width/2 + 0.3 && 
+                    dy >= -0.2 && dy <= 0.2 && // Increased threshold for being on top
+                    dz < platform.depth/2 + 0.3) {
+                    return platform.y + platform.height/2;
+                }
+            }
+            
+            // Check if player is on the ground (y=0)
+            const isInStartingArea = isInStartingZone();
+            if (Math.abs(playerFeetY) <= 0.2) { // Ground detection
+                if (!isInStartingArea) {
+                    console.log("Player on ground outside starting area - should trigger game over");
+                }
+                return 0;
+            }
+            
+            return false;
+        }
+
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let jump = false;
+
+        document.addEventListener('keydown', (event) => {
+            if (gameState !== 'playing') return;
+            
+            switch(event.key) {
+                case 'w': moveForward = true; break;
+                case 's': moveBackward = true; break;
+                case 'a': moveLeft = true; break;
+                case 'd': moveRight = true; break;
+                case ' ': 
+                    // Prevent default behavior for space to avoid page scrolling
+                    event.preventDefault();
+                    
+                    // First jump (from ground)
+                    const platformHeight = isOnPlatform();
+                    if (platformHeight !== false && !isJumping && canJump) {
+                        // Initiate jump
+                        isJumping = true;
+                        jumpVelocity = 0.7; // Increased from 0.4 to 0.7 for much higher jumps
+                        canJump = false;
+                        jumpCooldown = 15;
+                        hasDoubleJumped = false; // Reset double jump state when jumping from ground
+                        
+                        // Visual feedback for jump
+                        leftLeg.scale.y = 0.7; // More compression for bigger jump
+                        rightLeg.scale.y = 0.7;
+                        setTimeout(() => {
+                            leftLeg.scale.y = 1;
+                            rightLeg.scale.y = 1;
+                        }, 100);
+                        
+                        console.log("FIRST JUMP INITIATED"); // Debug message
+                    } 
+                    // Double jump (while in air)
+                    else if (isJumping && !hasDoubleJumped) {
+                        // Initiate double jump
+                        jumpVelocity = 0.6; // Slightly less powerful than first jump
+                        hasDoubleJumped = true; // Mark double jump as used
+                        
+                        // Visual feedback for double jump
+                        leftLeg.scale.y = 0.8;
+                        rightLeg.scale.y = 0.8;
+                        setTimeout(() => {
+                            leftLeg.scale.y = 1;
+                            rightLeg.scale.y = 1;
+                        }, 100);
+                        
+                        // Add particle effect for double jump
+                        createJumpParticles();
+                        
+                        console.log("DOUBLE JUMP INITIATED"); // Debug message
+                    }
+                    break;
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            switch(event.key) {
+                case 'w': moveForward = false; break;
+                case 's': moveBackward = false; break;
+                case 'a': moveLeft = false; break;
+                case 'd': moveRight = false; break;
+                case ' ': jump = false; break;
+            }
+        });
+
+        function startGame() {
+            // Get player name
+            playerName = playerNameInput.value.trim();
+            if (!playerName) {
+                playerName = "Player" + Math.floor(Math.random() * 1000);
+            }
+            
+            // Reset game state
+            score = 0;
+            points = 0;
+            timeRemaining = gameTime;
+            scoreElement.textContent = `Coins: ${score} (${points} pts)`;
+            timerElement.textContent = `Time: ${timeRemaining}s`;
+            
+            // Reset jump mechanics
+            isJumping = false;
+            jumpVelocity = 0;
+            jumpCooldown = 0;
+            canJump = true;
+            hasDoubleJumped = false; // Reset double jump state
+            
+            // Reset tooltips visibility
+            window.tooltipsVisible = true;
+            
+            // Remove any existing temporary tooltips
+            if (window.endMarkers) {
+                for (let i = window.endMarkers.length - 1; i >= 0; i--) {
+                    if (window.endMarkers[i].isTemporary) {
+                        document.body.removeChild(window.endMarkers[i].element);
+                        window.endMarkers.splice(i, 1);
+                    }
+                }
+            }
+            
+            // Add back the temporary tooltips
+            addTextHint(0, 3, 35, "Use WASD to move", true);
+            addTextHint(0, 3, 32, "Press SPACE to jump", true);
+            addTextHint(-8, 5, 30, "Follow the grey arrows", true);
+            
+            // Hide overlay
+            gameOverlay.style.display = 'none';
+            
+            // Start the timer
+            gameState = 'playing';
+            gameTimer = setInterval(updateTimer, 1000);
+            
+            // Reset player position to start
+            player.position.set(0, 0.9, 40);
+            
+            // Remove existing coins and create new ones
+            for (let i = coins.length - 1; i >= 0; i--) {
+                scene.remove(coins[i]);
+            }
+            coins = [];
+            for(let i = 0; i < 100; i++) {
+                createCoin();
+            }
+        }
+        
+        function updateTimer() {
+            timeRemaining--;
+            timerElement.textContent = `Time: ${timeRemaining}s`;
+            
+            if (timeRemaining <= 0) {
+                endGame();
+            }
+        }
+        
+        function endGame(completed = false, fell = false) {
+            // Stop the game immediately
+            clearInterval(gameTimer);
+            gameState = 'end';
+            
+            console.log("Game ended with status - Completed:", completed, "Fell:", fell);
+            
+            // Calculate final score
+            const finalScore = points + (completed ? timeRemaining : 0);
+            
+            // Show game over screen
+            let message;
+            
+            if (completed) {
+                message = `<h1>Course Completed!</h1>
+                         <p>You collected ${score} coins with ${timeRemaining} seconds remaining!</p>
+                         <p>Coin points: ${points}</p>
+                         <p>Time bonus: ${timeRemaining}</p>
+                         <p style="font-size: 24px; font-weight: bold;">Final score: ${finalScore}</p>`;
+                
+                // Save score to leaderboard
+                saveScore(finalScore);
+            } else if (fell) {
+                message = `<h1>You Fell!</h1>
+                         <p>You collected ${score} coins (${points} points) before falling off the course.</p>
+                         <p>Try again to reach the finish line!</p>`;
+                
+                console.log("Displaying 'You Fell!' message");
+                
+                // Save score to leaderboard only if they collected some coins
+                if (points > 0) {
+                    saveScore(points);
+                }
+            } else {
+                message = `<h1>Time's Up!</h1>
+                         <p>You collected ${score} coins (${points} points) in ${gameTime} seconds!</p>
+                         <p>Final score: ${points}</p>`;
+                
+                // Save score to leaderboard
+                saveScore(points);
+            }
+            
+            // Update leaderboard display
+            updateLeaderboardDisplay();
+            
+            // Show the game over overlay
+            gameOverlay.innerHTML = `
+                ${message}
+                <p>Use WASD to move and SPACE to jump</p>
+                <button id="restartButton">Play Again</button>
+                <div id="leaderboard">
+                    <h2>Leaderboard</h2>
+                    <div id="leaderboardEntries"></div>
+                </div>
+            `;
+            
+            // Update the leaderboard entries in the new overlay
+            leaderboardEntries = document.getElementById('leaderboardEntries');
+            updateLeaderboardDisplay();
+            
+            // Display the overlay
+            gameOverlay.style.display = 'flex';
+            
+            // Add event listener to restart button
+            document.getElementById('restartButton').addEventListener('click', () => {
+                // Show the name input again
+                gameOverlay.innerHTML = `
+                    <h1>ObbyCoin</h1>
+                    <p>Collect as many coins as possible in 60 seconds!</p>
+                    <input type="text" id="playerNameInput" placeholder="Enter your name" maxlength="15" value="${playerName}">
+                    <button id="startButton">Start Game</button>
+                    <div id="leaderboard">
+                        <h2>Leaderboard</h2>
+                        <div id="leaderboardEntries"></div>
+                    </div>
+                `;
+                
+                // Update references
+                playerNameInput = document.getElementById('playerNameInput');
+                leaderboardEntries = document.getElementById('leaderboardEntries');
+                startButton = document.getElementById('startButton');
+                
+                // Update leaderboard display
+                updateLeaderboardDisplay();
+                
+                // Add event listener to start button
+                startButton.addEventListener('click', startGame);
+            });
+        }
+        
+        // Save score to leaderboard
+        function saveScore(score) {
+            // Add score to leaderboard
+            leaderboard.push({
+                name: playerName,
+                points: score,
+                date: new Date().toISOString()
+            });
+            
+            // Sort leaderboard by score (highest first)
+            leaderboard.sort((a, b) => b.points - a.points);
+            
+            // Keep only top 10 scores
+            if (leaderboard.length > 10) {
+                leaderboard = leaderboard.slice(0, 10);
+            }
+            
+            // Save to localStorage
+            try {
+                localStorage.setItem('obbyLeaderboard', JSON.stringify(leaderboard));
+            } catch (e) {
+                console.error("Error saving leaderboard:", e);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Apply gravity and handle jumping
+            if (gameState === 'playing') {
+                // Check if player has left starting area and tooltips are still visible
+                if (window.tooltipsVisible && hasLeftStartingArea()) {
+                    removeTemporaryTooltips();
+                }
+                
+                // Handle jump cooldown
+                if (jumpCooldown > 0) {
+                    jumpCooldown--;
+                    if (jumpCooldown === 0) {
+                        canJump = true;
+                    }
+                }
+                
+                const onPlatformHeight = isOnPlatform();
+                
+                // Debug info
+                if (jump && !isJumping) {
+                    console.log("Trying to jump, on platform:", onPlatformHeight !== false);
+                }
+                
+                if (isJumping) {
+                    // Apply jump physics
+                    player.position.y += jumpVelocity;
+                    jumpVelocity -= 0.02; // Increased gravity effect from 0.015 to 0.02 for better jump arc
+                    
+                    // Check if we've landed on a platform during jump
+                    if (jumpVelocity < 0 && onPlatformHeight !== false && 
+                        player.position.y - 0.9 <= onPlatformHeight) {
+                        isJumping = false;
+                        jumpVelocity = 0;
+                        hasDoubleJumped = false; // Reset double jump when landing
+                        player.position.y = onPlatformHeight + 0.9;
+                    }
+                } else {
+                    // Not jumping
+                    if (onPlatformHeight !== false) {
+                        // Player is on a platform or ground
+                        player.position.y = onPlatformHeight + 0.9;
+                        hasDoubleJumped = false; // Reset double jump when on ground
+                        
+                        // If player is on the ground (not a platform) and outside starting area, end game
+                        if (onPlatformHeight === 0 && !isInStartingZone()) {
+                            console.log("Player landed on ground level outside starting area");
+                            endGame(false, true);
+                            return;
+                        }
+                    } else {
+                        // Player is in the air (falling)
+                        player.position.y -= 0.10; // Fall speed
+                        isJumping = true; // Consider falling as jumping for double jump purposes
+                        jumpVelocity = -0.15; // Set negative velocity for falling
+                    }
+                }
+                
+                // Check if player has fallen too far - game over condition
+                // Only apply this check if player is not in the starting area
+                const isInStartingArea = isInStartingZone();
+                if (!isInStartingArea && player.position.y < -5) {
+                    console.log("Player fell off the course at position:", player.position.x, player.position.y, player.position.z);
+                    endGame(false, true); // Pass true as second parameter to indicate falling death
+                    return;
+                }
+                
+                // FIXED: Add a more direct check for falling to the ground
+                // If player is below a certain height and not in starting area, they've fallen
+                if (!isInStartingArea && player.position.y < 1.0 && player.position.y > 0.5) {
+                    console.log("FALL DETECTED: Player on ground at position:", player.position.x, player.position.y, player.position.z);
+                    console.log("Ending game due to fall...");
+                    endGame(false, true);
+                    return;
+                }
+                
+                // Check if player has fallen to the ground outside the starting area
+                if (!isInStartingArea && Math.abs(player.position.y - 0.9) < 0.3) {
+                    console.log("Player landed on the ground outside the starting area at position:", player.position.x, player.position.y, player.position.z);
+                    console.log("Game ending due to falling on ground outside starting area");
+                    endGame(false, true); // End game when landing on ground outside starting area
+                    return;
+                }
+                
+                // Additional check: If player is on the ground and not on a platform and not in starting area
+                if (!isInStartingArea && Math.abs(player.position.y - 0.9) < 0.5 && isOnPlatform() === false) {
+                    console.log("Player is on the ground but not on a platform outside starting area");
+                    endGame(false, true);
+                    return;
+                }
+                
+                // Prevent falling below ground (only for the starting area ground)
+                if (player.position.y < 0.9 && isInStartingArea) {
+                    player.position.y = 0.9;
+                    isJumping = false;
+                    jumpVelocity = 0;
+                    hasDoubleJumped = false; // Reset double jump when hitting ground
+                }
+                
+                // Player movement
+                const speed = 0.1;
+                let isMoving = false;
+                
+                let newX = player.position.x;
+                let newZ = player.position.z;
+                let direction = null;
+                
+                if(moveForward) {
+                    newZ -= speed;
+                    player.rotation.y = Math.PI;
+                    direction = 'forward';
+                    isMoving = true;
+                }
+                if(moveBackward) {
+                    newZ += speed;
+                    player.rotation.y = 0;
+                    direction = 'backward';
+                    isMoving = true;
+                }
+                if(moveLeft) {
+                    newX -= speed;
+                    player.rotation.y = Math.PI / 2;
+                    direction = 'left';
+                    isMoving = true;
+                }
+                if(moveRight) {
+                    newX += speed;
+                    player.rotation.y = -Math.PI / 2;
+                    direction = 'right';
+                    isMoving = true;
+                }
+                
+                // Update player position
+                if (isMoving) {
+                    // Check world boundaries
+                    const worldSize = 50;
+                    newX = Math.max(-worldSize + 1, Math.min(worldSize - 1, newX));
+                    newZ = Math.max(-worldSize + 1, Math.min(worldSize - 1, newZ));
+                    
+                    player.position.x = newX;
+                    player.position.z = newZ;
+                    
+                    // Update face direction
+                    updateFaceDirection(direction);
+                    
+                    walkingCycle += 0.15;
+                    
+                    // Swing legs and arms in opposite phases
+                    leftLeg.rotation.x = Math.sin(walkingCycle) * 0.5;
+                    rightLeg.rotation.x = Math.sin(walkingCycle + Math.PI) * 0.5;
+                    leftArm.rotation.x = Math.sin(walkingCycle + Math.PI) * 0.5;
+                    rightArm.rotation.x = Math.sin(walkingCycle) * 0.5;
+                } else {
+                    // Reset limbs when standing still
+                    leftLeg.rotation.x = 0;
+                    rightLeg.rotation.x = 0;
+                    leftArm.rotation.x = 0;
+                    rightArm.rotation.x = 0;
+                }
+
+                // Coin collection - using backward iteration to safely remove elements
+                for (let i = coins.length - 1; i >= 0; i--) {
+                    const coin = coins[i];
+                    
+                    // Calculate distance in 3D space
+                    const dx = player.position.x - coin.position.x;
+                    const dy = player.position.y - coin.position.y;
+                    const dz = player.position.z - coin.position.z;
+                    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    
+                    // Check if player is close enough to collect the coin
+                    if (distance < 1.5) {
+                        scene.remove(coin);
+                        coins.splice(i, 1);
+                        
+                        // Get coin value (1 for regular, 2 for special)
+                        const coinValue = coin.userData.value || 1;
+                        
+                        // Update score (number of coins) and points (actual value)
+                        score++;
+                        points += coinValue;
+                        
+                        // Show coin value in score display
+                        scoreElement.textContent = `Coins: ${score} (${points} pts)`;
+                        
+                        // Create floating text to show coin value
+                        createFloatingText(coin.position.x, coin.position.y, coin.position.z, coinValue > 1 ? `+${coinValue} pts!` : "+1 pt", coinValue > 1 ? 0x00FFFF : 0xFFD700);
+                        
+                        // Only create a new coin if we haven't collected all 100
+                        if (score < 100) {
+                            createCoin();
+                        }
+                    }
+                    
+                    // Make coins rotate for better visibility
+                    coin.rotation.y += 0.02;
+                    
+                    // Make double-value coins' rings rotate in opposite direction for effect
+                    if (coin.children.length > 0) {
+                        coin.children[0].rotation.z += 0.05;
+                    }
+                }
+
+                // Update end marker positions in screen space
+                if (window.endMarkers) {
+                    window.endMarkers.forEach(marker => {
+                        // Convert 3D position to screen position
+                        const vector = marker.position.clone();
+                        vector.project(camera);
+                        
+                        // Convert to CSS coordinates
+                        const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+                        const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+                        
+                        // Update marker position
+                        marker.element.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+                        
+                        // Hide if behind camera
+                        if (vector.z > 1) {
+                            marker.element.style.display = 'none';
+                        } else {
+                            marker.element.style.display = 'flex';
+                        }
+                    });
+                }
+                
+                // Check if player reached the end goal - updated coordinates
+                const endGoalPosition = new THREE.Vector3(0, 16, -45);
+                const distanceToEnd = player.position.distanceTo(endGoalPosition);
+                
+                // Debug output for finish flag detection
+                if (distanceToEnd < 10) {
+                    console.log("Close to finish flag. Distance:", distanceToEnd);
+                    console.log("Player position:", player.position.x, player.position.y, player.position.z);
+                }
+                
+                // More lenient finish detection - check if player is close to the end goal in X and Z coordinates
+                // and at a reasonable height (allowing for some vertical difference)
+                const xzDistanceToEnd = Math.sqrt(
+                    Math.pow(player.position.x - endGoalPosition.x, 2) + 
+                    Math.pow(player.position.z - endGoalPosition.z, 2)
+                );
+                
+                const heightDifference = Math.abs(player.position.y - endGoalPosition.y);
+                
+                // FIXED: Make flag detection much more lenient
+                if (xzDistanceToEnd < 10 && heightDifference < 8) {
+                    // Player reached the end goal
+                    console.log("FINISH FLAG REACHED! Player at:", player.position.x, player.position.y, player.position.z);
+                    console.log("XZ Distance to end:", xzDistanceToEnd, "Height difference:", heightDifference);
+                    endGame(true); // Pass true to indicate successful completion
+                    return; // Add return to prevent further processing
+                }
+                
+                // FIXED: Add an additional check for the finish flag
+                // If player is near the finish coordinates in any way, end the game
+                if (Math.abs(player.position.x) < 5 && // Near x=0
+                    player.position.z < -40 && // Beyond z=-40
+                    player.position.y > 10) {  // Above y=10 (on the high platforms)
+                    console.log("ALTERNATE FINISH DETECTION! Player at:", 
+                        player.position.x.toFixed(2), 
+                        player.position.y.toFixed(2), 
+                        player.position.z.toFixed(2));
+                    endGame(true);
+                    return;
+                }
+
+                // Update particles
+                updateParticles();
+                
+                // Update floating texts
+                if (window.floatingTexts) {
+                    for (let i = window.floatingTexts.length - 1; i >= 0; i--) {
+                        const text = window.floatingTexts[i];
+                        
+                        // Update position
+                        text.position.add(text.velocity);
+                        
+                        // Convert 3D position to screen position
+                        const vector = text.position.clone();
+                        vector.project(camera);
+                        
+                        // Convert to CSS coordinates
+                        const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+                        const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+                        
+                        // Update text position
+                        text.element.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+                        
+                        // Fade out as life decreases
+                        text.element.style.opacity = text.life / 60;
+                        
+                        // Decrease life
+                        text.life--;
+                        
+                        // Remove dead texts
+                        if (text.life <= 0) {
+                            document.body.removeChild(text.element);
+                            window.floatingTexts.splice(i, 1);
+                        }
+                    }
+                }
+                
+                // Animate finish rings
+                if (window.finishRings) {
+                    const time = Date.now() * 0.001; // Get time in seconds
+                    window.finishRings.forEach((ringObj, index) => {
+                        // Make rings float up and down
+                        ringObj.ring.position.y = ringObj.baseY + Math.sin(time * 2 + index) * 0.5;
+                        
+                        // Make rings rotate
+                        ringObj.ring.rotation.z += 0.01 * (index % 2 === 0 ? 1 : -1);
+                    });
+                }
+            }
+
+            // Camera follows player with increased distance for better view
+            camera.position.x = player.position.x;
+            camera.position.z = player.position.z + 10; // Increased from 5 to 10
+            camera.position.y = player.position.y + 12; // Increased from 5 to 12
+            camera.lookAt(player.position);
+
+            renderer.render(scene, camera);
+        }
+
+        // Add a new function to update face direction
+        function updateFaceDirection(direction) {
+            // Find the face features (eyes and mouth)
+            let leftEye, rightEye, mouth;
+            
+            // Find the face features in the player's children
+            player.children.forEach(child => {
+                if (child.position.y === 1.55 && child.position.x === -0.15) leftEye = child;
+                if (child.position.y === 1.55 && child.position.x === 0.15) rightEye = child;
+                if (child.position.y === 1.4) mouth = child;
+            });
+            
+            if (!leftEye || !rightEye || !mouth) return; // Safety check
+            
+            // Reset positions
+            leftEye.position.set(-0.15, 1.55, 0);
+            rightEye.position.set(0.15, 1.55, 0);
+            mouth.position.set(0, 1.4, 0);
+            
+            // Update based on direction
+            switch(direction) {
+                case 'forward': // Looking forward (away from camera)
+                    leftEye.position.z = 0.31;
+                    rightEye.position.z = 0.31;
+                    mouth.position.z = 0.31;
+                    break;
+                case 'backward': // Looking backward (toward camera)
+                    leftEye.position.z = -0.31;
+                    rightEye.position.z = -0.31;
+                    mouth.position.z = -0.31;
+                    break;
+                case 'left': // Looking left
+                    leftEye.position.z = 0.15;
+                    rightEye.position.z = -0.15;
+                    mouth.position.x = -0.31;
+                    mouth.position.z = 0;
+                    break;
+                case 'right': // Looking right
+                    leftEye.position.z = -0.15;
+                    rightEye.position.z = 0.15;
+                    mouth.position.x = 0.31;
+                    mouth.position.z = 0;
+                    break;
+            }
+        }
+
+        // Create a flag to mark the end of the course
+        function createEndFlag(x, y, z) {
+            // Flag pole
+            const poleGeometry = new THREE.CylinderGeometry(0.1, 0.1, 4, 8);
+            const poleMaterial = new THREE.MeshBasicMaterial({ color: 0x8B4513 });
+            const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+            pole.position.set(x, y, z);
+            scene.add(pole);
+            
+            // Flag
+            const flagGeometry = new THREE.BoxGeometry(2, 1, 0.1);
+            const flagMaterial = new THREE.MeshBasicMaterial({ color: 0xFF0000 });
+            const flag = new THREE.Mesh(flagGeometry, flagMaterial);
+            flag.position.set(x + 1, y + 1.5, z);
+            scene.add(flag);
+            
+            // Add a glowing ring around the flag to make it more visible
+            const ringGeometry = new THREE.TorusGeometry(1.5, 0.1, 16, 32);
+            const ringMaterial = new THREE.MeshBasicMaterial({ color: 0xFF0000 });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+            ring.position.set(x, y + 2, z);
+            ring.rotation.x = Math.PI / 2;
+            scene.add(ring);
+            
+            // Add a second larger ring
+            const ring2Geometry = new THREE.TorusGeometry(2.5, 0.1, 16, 32);
+            const ring2Material = new THREE.MeshBasicMaterial({ color: 0xFFFF00 });
+            const ring2 = new THREE.Mesh(ring2Geometry, ring2Material);
+            ring2.position.set(x, y + 2, z);
+            ring2.rotation.x = Math.PI / 2;
+            scene.add(ring2);
+            
+            // Store rings for animation
+            if (!window.finishRings) window.finishRings = [];
+            window.finishRings.push({ ring: ring, baseY: y + 2 });
+            window.finishRings.push({ ring: ring2, baseY: y + 2 });
+            
+            // Add text to indicate "FINISH"
+            const textDiv = document.createElement('div');
+            textDiv.style.position = 'absolute';
+            textDiv.style.width = '100px';
+            textDiv.style.height = '30px';
+            textDiv.style.backgroundColor = 'rgba(0,0,0,0.7)';
+            textDiv.style.color = 'white';
+            textDiv.style.borderRadius = '5px';
+            textDiv.style.display = 'flex';
+            textDiv.style.justifyContent = 'center';
+            textDiv.style.alignItems = 'center';
+            textDiv.style.fontSize = '16px';
+            textDiv.style.fontWeight = 'bold';
+            textDiv.textContent = 'FINISH';
+            textDiv.style.pointerEvents = 'none';
+            document.body.appendChild(textDiv);
+            
+            // Store the text element and its target position for updating in the animation loop
+            if (!window.endMarkers) window.endMarkers = [];
+            window.endMarkers.push({
+                element: textDiv,
+                position: new THREE.Vector3(x, y + 3, z)
+            });
+            
+            // Add a visible finish line marker
+            addTextHint(x, y + 5, z, "Finish Line!", false);
+        }
+
+        // Create directional arrows to guide the player
+        function createDirectionalArrows() {
+            // Define the path points (key platforms in the course)
+            const pathPoints = [
+                {x: 0, y: 1, z: 40},      // Start
+                {x: -8, y: 3, z: 30},     // First platform
+                {x: -16, y: 5, z: 20},    // Second platform
+                {x: -8, y: 7, z: 10},     // Third platform
+                {x: 0, y: 9, z: 0},       // Fourth platform
+                {x: 8, y: 11, z: -10},    // Fifth platform
+                {x: 16, y: 13, z: -20},   // Sixth platform
+                {x: 8, y: 15, z: -30},    // Seventh platform
+                {x: 0, y: 17, z: -45}     // End goal - updated coordinates
+            ];
+            
+            // Create arrows between each point - more arrows for better guidance
+            for (let i = 0; i < pathPoints.length - 1; i++) {
+                const start = pathPoints[i];
+                const end = pathPoints[i+1];
+                
+                // Calculate direction
+                const direction = new THREE.Vector3(
+                    end.x - start.x,
+                    end.y - start.y,
+                    end.z - start.z
+                ).normalize();
+                
+                // Create multiple arrows along the path
+                const segments = 3; // More arrows between points
+                for (let j = 1; j <= segments; j++) {
+                    // Create arrow
+                    const arrowLength = 2;
+                    const arrowGeometry = new THREE.ConeGeometry(0.5, arrowLength, 8);
+                    const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0x888888 }); // Grey arrows instead of yellow
+                    const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+                    
+                    // Position at intervals between points
+                    const t = j / (segments + 1);
+                    arrow.position.set(
+                        start.x + (end.x - start.x) * t,
+                        start.y + (end.y - start.y) * t + 2,
+                        start.z + (end.z - start.z) * t
+                    );
+                    
+                    // Orient arrow to point in the right direction
+                    arrow.lookAt(end.x, end.y, end.z);
+                    arrow.rotateX(Math.PI / 2);
+                    
+                    scene.add(arrow);
+                }
+            }
+            
+            // Add floating text hints at tricky spots
+            //addTextHint(-4, 16, -40, "Jump across these stones!");
+            //addTextHint(0, 18, -45, "Finish Line!");
+            
+            // Add initial helper tooltips that will disappear
+            addTextHint(0, 3, 35, "Use WASD to move", true);
+            addTextHint(0, 3, 32, "Press SPACE to jump", true);
+            addTextHint(-8, 5, 30, "Follow the grey arrows", true); // Updated text to match new arrow color
+        }
+
+        // Add text hints to guide players
+        function addTextHint(x, y, z, message, isTemporary = false) {
+            const textDiv = document.createElement('div');
+            textDiv.style.position = 'absolute';
+            textDiv.style.width = '150px';
+            textDiv.style.height = '40px';
+            textDiv.style.backgroundColor = 'rgba(0,0,0,0.7)';
+            textDiv.style.color = 'white';
+            textDiv.style.borderRadius = '5px';
+            textDiv.style.display = 'flex';
+            textDiv.style.justifyContent = 'center';
+            textDiv.style.alignItems = 'center';
+            textDiv.style.fontSize = '14px';
+            textDiv.style.fontWeight = 'bold';
+            textDiv.textContent = message;
+            textDiv.style.pointerEvents = 'none';
+            document.body.appendChild(textDiv);
+            
+            // Store the text element and its target position for updating in the animation loop
+            if (!window.endMarkers) window.endMarkers = [];
+            window.endMarkers.push({
+                element: textDiv,
+                position: new THREE.Vector3(x, y, z),
+                isTemporary: isTemporary // Flag to identify temporary tooltips
+            });
+        }
+
+        // Create particles for double jump effect
+        function createJumpParticles() {
+            const particleCount = 15;
+            const particleSize = 0.1;
+            const particleColor = 0xFFFFFF;
+            
+            for (let i = 0; i < particleCount; i++) {
+                const particleGeometry = new THREE.SphereGeometry(particleSize, 8, 8);
+                const particleMaterial = new THREE.MeshBasicMaterial({ color: particleColor });
+                const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+                
+                // Position particles around player's feet
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 0.3 + Math.random() * 0.3;
+                particle.position.x = player.position.x + Math.cos(angle) * radius;
+                particle.position.y = player.position.y - 0.7; // At feet level
+                particle.position.z = player.position.z + Math.sin(angle) * radius;
+                
+                // Add velocity for animation
+                particle.userData = {
+                    velocity: {
+                        x: (Math.random() - 0.5) * 0.1,
+                        y: Math.random() * 0.1 + 0.05,
+                        z: (Math.random() - 0.5) * 0.1
+                    },
+                    life: 20 // Frames the particle will live
+                };
+                
+                scene.add(particle);
+                
+                // Store particles for animation
+                if (!window.particles) window.particles = [];
+                window.particles.push(particle);
+            }
+        }
+
+        // Update particles in animation loop
+        function updateParticles() {
+            if (!window.particles) return;
+            
+            for (let i = window.particles.length - 1; i >= 0; i--) {
+                const particle = window.particles[i];
+                
+                // Update position based on velocity
+                particle.position.x += particle.userData.velocity.x;
+                particle.position.y += particle.userData.velocity.y;
+                particle.position.z += particle.userData.velocity.z;
+                
+                // Apply gravity to particles
+                particle.userData.velocity.y -= 0.005;
+                
+                // Decrease life
+                particle.userData.life--;
+                
+                // Remove dead particles
+                if (particle.userData.life <= 0) {
+                    scene.remove(particle);
+                    window.particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Function to check if player has left the starting area
+        function hasLeftStartingArea() {
+            // Check if player has moved away from the starting platform
+            const startingAreaZ = 30; // Z-coordinate threshold for the starting area
+            return player.position.z < startingAreaZ;
+        }
+
+        // Function to remove temporary tooltips
+        function removeTemporaryTooltips() {
+            if (!window.endMarkers) return;
+            
+            // Remove temporary tooltips from DOM and array
+            for (let i = window.endMarkers.length - 1; i >= 0; i--) {
+                const marker = window.endMarkers[i];
+                if (marker.isTemporary) {
+                    document.body.removeChild(marker.element);
+                    window.endMarkers.splice(i, 1);
+                }
+            }
+            
+            // Mark tooltips as removed
+            window.tooltipsVisible = false;
+        }
+
+        // Function to check if player is in the starting zone where ground collision should apply
+        function isInStartingZone() {
+            // Define the starting zone area - a square around the starting platform
+            const startingZoneX = 15; // Half-width of the zone
+            const startingZoneZ = 15; // Half-depth of the zone
+            const startingCenterX = 0; // Center X of starting platform
+            const startingCenterZ = 40; // Center Z of starting platform
+            
+            // FIXED: More precise check for starting zone
+            const distanceX = Math.abs(player.position.x - startingCenterX);
+            const distanceZ = Math.abs(player.position.z - startingCenterZ);
+            const inStartingZone = distanceX < startingZoneX && distanceZ < startingZoneZ;
+            
+            // Enhanced debug output
+            if (player.position.y < 1.0 && !inStartingZone) {
+                console.log("Player near ground outside starting zone:", 
+                    player.position.x.toFixed(2), 
+                    player.position.y.toFixed(2), 
+                    player.position.z.toFixed(2));
+                console.log("Distance from starting center - X:", distanceX.toFixed(2), "Z:", distanceZ.toFixed(2));
+                console.log("Starting zone boundaries - X:", startingZoneX, "Z:", startingZoneZ);
+            }
+            
+            return inStartingZone;
+        }
+
+        // Display initial leaderboard
+        function updateLeaderboardDisplay() {
+            leaderboardEntries.innerHTML = '';
+            leaderboard.forEach((entry, index) => {
+                const entryDiv = document.createElement('div');
+                entryDiv.className = 'leaderboard-entry';
+                entryDiv.innerHTML = `
+                    <span class="highlight">${index + 1}.</span> ${entry.name} - ${entry.points} points
+                `;
+                leaderboardEntries.appendChild(entryDiv);
+            });
+        }
+
+        // Create floating text to show coin value
+        function createFloatingText(x, y, z, text, color = 0xFFFFFF) {
+            const textDiv = document.createElement('div');
+            textDiv.style.position = 'absolute';
+            textDiv.style.width = '60px';
+            textDiv.style.height = '30px';
+            textDiv.style.color = `#${color.toString(16).padStart(6, '0')}`;
+            textDiv.style.fontFamily = 'Arial';
+            textDiv.style.fontSize = '16px';
+            textDiv.style.fontWeight = 'bold';
+            textDiv.style.textShadow = '1px 1px 2px black';
+            textDiv.style.display = 'flex';
+            textDiv.style.justifyContent = 'center';
+            textDiv.style.alignItems = 'center';
+            textDiv.textContent = text;
+            textDiv.style.pointerEvents = 'none';
+            document.body.appendChild(textDiv);
+            
+            // Store the text element and its target position for updating in the animation loop
+            if (!window.floatingTexts) window.floatingTexts = [];
+            
+            const floatingText = {
+                element: textDiv,
+                position: new THREE.Vector3(x, y + 1, z),
+                life: 60, // Frames the text will live
+                velocity: new THREE.Vector3(0, 0.03, 0) // Move upward
+            };
+            
+            window.floatingTexts.push(floatingText);
+        }
+
+        init();
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
